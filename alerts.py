@@ -32,7 +32,9 @@ def send_telegram(token, chat_id, text):
         "text": text,
         "parse_mode": "Markdown",
         "disable_web_page_preview": True,
-    })
+    }, timeout=15)
+    if not resp.ok:
+        print(f"[alerts] telegram send failed: {resp.status_code} {resp.text[:100]}", file=sys.stderr)
     return resp.ok
 
 
@@ -44,13 +46,16 @@ def find_deals(db):
     for route in routes:
         origin, dest, name, threshold = route["origin"], route["dest"], route["name"], route["threshold"]
 
-        # Get latest scan's cheapest price per flight_date
+        # Get cheapest flight per date from latest scan (window function ensures correct airline/stops/duration)
         rows = db.execute("""
-            SELECT flight_date, MIN(price) as min_price, airline, stops, duration
-            FROM prices
-            WHERE origin=? AND dest=?
-              AND scanned_at = (SELECT MAX(scanned_at) FROM scan_log WHERE origin=? AND dest=?)
-            GROUP BY flight_date
+            SELECT flight_date, price AS min_price, airline, stops, duration
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY flight_date ORDER BY price ASC) AS rn
+                FROM prices
+                WHERE origin=? AND dest=?
+                  AND scanned_at = (SELECT MAX(scanned_at) FROM scan_log WHERE origin=? AND dest=?)
+            )
+            WHERE rn = 1
         """, (origin, dest, origin, dest)).fetchall()
 
         rolling_avg = get_rolling_avg(db, origin, dest, ROLLING_AVG_DAYS)
@@ -60,11 +65,9 @@ def find_deals(db):
             flight_date = row["flight_date"]
             reason = None
 
-            # Check fixed threshold
             if threshold and price <= threshold:
                 reason = f"under ${threshold} threshold"
 
-            # Check rolling average drop
             if rolling_avg and price <= rolling_avg * (1 - DROP_PERCENT / 100):
                 pct = int((1 - price / rolling_avg) * 100)
                 reason = f"{pct}% below avg ${int(rolling_avg)}"
@@ -88,7 +91,7 @@ def find_deals(db):
 
 def format_deal(deal):
     avg_info = f" (avg ${deal['rolling_avg']})" if deal["rolling_avg"] else ""
-    stops = "Nonstop" if deal["stops"] == 0 else f"{deal['stops']} stop"
+    stops = "Nonstop" if deal["stops"] == 0 else f"{deal['stops']} stop{'s' if deal['stops'] != 1 else ''}"
     return (
         f"*{deal['origin']} → {deal['name']}* ${deal['price']}{avg_info}\n"
         f"{deal['flight_date']} | {deal['airline']} | {stops} | {deal['duration']}\n"
@@ -98,38 +101,47 @@ def format_deal(deal):
 
 def run_alerts():
     db = get_db()
-    tg = load_telegram_config()
-    token = tg["TELEGRAM_BOT_TOKEN"]
-    chat_id = tg.get("TELEGRAM_FLIGHTS_CHANNEL", tg["TELEGRAM_CHANNEL_ID"])
+    try:
+        tg = load_telegram_config()
+        token = tg["TELEGRAM_BOT_TOKEN"]
+        chat_id = tg.get("TELEGRAM_FLIGHTS_CHANNEL", tg["TELEGRAM_CHANNEL_ID"])
 
-    deals = find_deals(db)
+        deals = find_deals(db)
 
-    if not deals:
-        print("[alerts] no deals found", file=sys.stderr)
-        db.close()
-        return
+        if not deals:
+            print("[alerts] no deals found", file=sys.stderr)
+            return
 
-    print(f"[alerts] {len(deals)} deals found", file=sys.stderr)
+        print(f"[alerts] {len(deals)} deals found", file=sys.stderr)
 
-    # Group deals into one message (max 10 per message)
-    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-    batch = []
-    for deal in sorted(deals, key=lambda d: d["price"]):
-        batch.append(format_deal(deal))
-        log_alert(db, now, deal["origin"], deal["dest"], deal["flight_date"], deal["price"])
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        sent = 0
+        batch = []
+        batch_deals = []
+        for deal in sorted(deals, key=lambda d: d["price"]):
+            batch.append(format_deal(deal))
+            batch_deals.append(deal)
 
-        if len(batch) == 10:
+            if len(batch) == 10:
+                msg = "\n\n".join(batch)
+                if send_telegram(token, chat_id, msg):
+                    for d in batch_deals:
+                        log_alert(db, now, d["origin"], d["dest"], d["flight_date"], d["price"])
+                    sent += len(batch_deals)
+                batch = []
+                batch_deals = []
+
+        if batch:
             msg = "\n\n".join(batch)
-            send_telegram(token, chat_id, msg)
-            batch = []
+            if send_telegram(token, chat_id, msg):
+                for d in batch_deals:
+                    log_alert(db, now, d["origin"], d["dest"], d["flight_date"], d["price"])
+                sent += len(batch_deals)
 
-    if batch:
-        msg = "\n\n".join(batch)
-        send_telegram(token, chat_id, msg)
-
-    db.commit()
-    db.close()
-    print(f"[alerts] sent {len(deals)} alerts", file=sys.stderr)
+        db.commit()
+        print(f"[alerts] sent {sent}/{len(deals)} alerts", file=sys.stderr)
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
