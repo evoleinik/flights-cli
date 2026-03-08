@@ -113,7 +113,7 @@ def _collapse_ranges(days):
     return ", ".join(ranges)
 
 
-def _group_dates_by_price(dates, max_tiers=2, max_dates=6):
+def _group_dates_by_price(dates):
     """Group dates by price, collapse contiguous days into ranges."""
     from collections import OrderedDict
     by_price = OrderedDict()
@@ -121,7 +121,7 @@ def _group_dates_by_price(dates, max_tiers=2, max_dates=6):
         by_price.setdefault(d["price"], []).append(d["flight_date"])
 
     parts = []
-    for price, fdates in list(by_price.items())[:max_tiers]:
+    for price, fdates in by_price.items():
         by_month = OrderedDict()
         for fd in fdates:
             m, day = int(fd[5:7]), fd[8:]
@@ -129,15 +129,7 @@ def _group_dates_by_price(dates, max_tiers=2, max_dates=6):
         month_parts = []
         for m, days in by_month.items():
             month_parts.append(f"{MONTH_NAMES[m]} {_collapse_ranges(days)}")
-        extra = ""
-        remaining = len(fdates) - max_dates
-        if remaining > 0:
-            extra = f" +{remaining} more"
-        parts.append(f"  ${price} — {' · '.join(month_parts)}{extra}")
-
-    skipped = len(by_price) - max_tiers
-    if skipped > 0:
-        parts.append(f"  +{skipped} more price levels")
+        parts.append(f"  ${price} — {' · '.join(month_parts)}")
     return "\n".join(parts)
 
 
@@ -147,9 +139,9 @@ def format_report(deals):
     lines = [f"*CNX Deals* {today}"]
 
     for deal in deals:
-        avg_info = f" avg ${deal['rolling_avg']}" if deal["rolling_avg"] else ""
+        avg_info = f"  avg ${deal['rolling_avg']}" if deal["rolling_avg"] else ""
         dates_str = _group_dates_by_price(deal["dates"])
-        lines.append(f"\n*{deal['name']}*{avg_info}\n{dates_str}")
+        lines.append(f"\n\n*{deal['name']}*{avg_info}\n{dates_str}")
 
     return "\n".join(lines)
 
