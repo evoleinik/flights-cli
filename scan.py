@@ -179,6 +179,7 @@ TOP_ROUTES = 10
 TOP_DATES = 10
 EXPAND_TOP = 5
 EXPAND_DAYS = 2  # ±2 days around winners
+RT_PRIORITY_ROUTES = [("CNX", "SIN")]  # always scan RT for these
 
 
 def scan_roundtrip(db, now):
@@ -198,9 +199,14 @@ def scan_roundtrip(db, now):
         print("[rt-scan] no one-way data to guide round-trip scan", file=sys.stderr)
         return
 
-    # Get unique top routes
+    # Get unique top routes (priority routes always included)
     seen_routes = set()
     top_routes = []
+    for origin_d, dest_d in RT_PRIORITY_ROUTES:
+        key = (origin_d, dest_d)
+        if key not in seen_routes:
+            seen_routes.add(key)
+            top_routes.append(key)
     for row in top:
         key = (row["origin"], row["dest"])
         if key not in seen_routes:

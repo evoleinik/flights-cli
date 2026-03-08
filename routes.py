@@ -20,7 +20,7 @@ ROUTES = [
     ("CNX", "PUS", "Busan", 150),
     ("CNX", "PVG", "Shanghai", 120),
     ("CNX", "RGN", "Yangon", 80),
-    ("CNX", "SIN", "Singapore", 80),
+    ("CNX", "SIN", "Singapore", 120),
     ("CNX", "TFU", "Chengdu", 80),
     ("CNX", "TPE", "Taipei", 100),
     ("CNX", "XIY", "Xi'an", 100),
