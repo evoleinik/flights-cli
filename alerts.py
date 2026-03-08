@@ -94,6 +94,31 @@ def find_deals(db):
     return deals
 
 
+MONTH_NAMES = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _group_dates_by_price(dates):
+    """Group dates by price, then compact by month. e.g. '$28: Apr 25,27,28'"""
+    from collections import OrderedDict
+    by_price = OrderedDict()
+    for d in dates:
+        by_price.setdefault(d["price"], []).append(d["flight_date"])
+
+    parts = []
+    for price, fdates in by_price.items():
+        # Group by month
+        by_month = OrderedDict()
+        for fd in fdates:
+            m, day = int(fd[5:7]), fd[8:]
+            by_month.setdefault(m, []).append(day.lstrip("0"))
+        month_parts = []
+        for m, days in by_month.items():
+            month_parts.append(f"{MONTH_NAMES[m]} {','.join(days)}")
+        parts.append(f"${price}: {' · '.join(month_parts)}")
+    return "\n".join(parts)
+
+
 def format_report(deals):
     """Format grouped deals as a single daily report."""
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
@@ -101,12 +126,8 @@ def format_report(deals):
 
     for deal in deals:
         avg_info = f" avg ${deal['rolling_avg']}" if deal["rolling_avg"] else ""
-        dates_str = " · ".join(
-            f"${d['price']} {d['flight_date'][5:]}"  # strip year, show MM-DD
-            for d in deal["dates"][:5]  # max 5 dates per route
-        )
-        extra = f" +{len(deal['dates']) - 5} more" if len(deal["dates"]) > 5 else ""
-        lines.append(f"\n*{deal['name']}*{avg_info}\n{dates_str}{extra}")
+        dates_str = _group_dates_by_price(deal["dates"])
+        lines.append(f"\n*{deal['name']}*{avg_info}\n{dates_str}")
 
     return "\n".join(lines)
 
