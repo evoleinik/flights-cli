@@ -113,7 +113,7 @@ def _collapse_ranges(days):
     return ", ".join(ranges)
 
 
-def _group_dates_by_price(dates):
+def _group_dates_by_price(dates, avg=None):
     """Group dates by price, collapse contiguous days into ranges."""
     from collections import OrderedDict
     by_price = OrderedDict()
@@ -129,7 +129,8 @@ def _group_dates_by_price(dates):
         month_parts = []
         for m, days in by_month.items():
             month_parts.append(f"{MONTH_NAMES[m]} {_collapse_ranges(days)}")
-        parts.append(f"  ${price} — {' · '.join(month_parts)}")
+        pct = f" ({int((1 - price / avg) * 100)}%)" if avg else ""
+        parts.append(f"  ${price}{pct} — {' · '.join(month_parts)}")
     return "\n".join(parts)
 
 
@@ -140,7 +141,7 @@ def format_report(deals):
 
     for deal in deals:
         avg_info = f"  avg ${deal['rolling_avg']}" if deal["rolling_avg"] else ""
-        dates_str = _group_dates_by_price(deal["dates"])
+        dates_str = _group_dates_by_price(deal["dates"], deal.get("rolling_avg"))
         lines.append(f"\n\n*{deal['name']}*{avg_info}\n{dates_str}")
 
     return "\n".join(lines)
