@@ -3,6 +3,7 @@
 
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -130,6 +131,7 @@ def run_alerts():
                     sent += len(batch_deals)
                 batch = []
                 batch_deals = []
+                time.sleep(1)
 
         if batch:
             msg = "\n\n".join(batch)
