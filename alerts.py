@@ -129,7 +129,7 @@ def _group_dates_by_price(dates, avg=None):
         month_parts = []
         for m, days in by_month.items():
             month_parts.append(f"{MONTH_NAMES[m]} {_collapse_ranges(days)}")
-        pct = f" ({int((1 - price / avg) * 100)}%)" if avg else ""
+        pct = f" ({int(price / avg * 100)}%)" if avg else ""
         parts.append(f"  ${price}{pct} — {' · '.join(month_parts)}")
     return "\n".join(parts)
 
