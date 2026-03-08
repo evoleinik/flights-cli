@@ -97,6 +97,16 @@ def find_deals(db):
 MONTH_NAMES = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+FLAGS = {
+    "AUH": "🇦🇪", "CAN": "🇨🇳", "CKG": "🇨🇳", "HAN": "🇻🇳", "HKG": "🇭🇰",
+    "ICN": "🇰🇷", "JHG": "🇨🇳", "KHH": "🇹🇼", "KIX": "🇯🇵", "KMG": "🇨🇳",
+    "KUL": "🇲🇾", "LPQ": "🇱🇦", "MDL": "🇲🇲", "PEK": "🇨🇳", "PUS": "🇰🇷",
+    "PVG": "🇨🇳", "RGN": "🇲🇲", "SIN": "🇸🇬", "TFU": "🇨🇳", "TPE": "🇹🇼",
+    "XIY": "🇨🇳", "BKK": "🇹🇭", "DMK": "🇹🇭", "HDY": "🇹🇭", "HHQ": "🇹🇭",
+    "HKT": "🇹🇭", "KBV": "🇹🇭", "KKC": "🇹🇭", "URT": "🇹🇭", "USM": "🇹🇭",
+    "UTH": "🇹🇭", "UTP": "🇹🇭",
+}
+
 
 def _collapse_ranges(days):
     """Turn [1,2,3,5,7,8,9] into '1-3, 5, 7-9'."""
@@ -137,12 +147,13 @@ def _group_dates_by_price(dates, avg=None):
 def format_report(deals):
     """Format grouped deals as a single daily report."""
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-    lines = [f"*CNX Deals* {today}"]
+    lines = [f"✈ *CNX Deals* {today}"]
 
     for deal in deals:
+        flag = FLAGS.get(deal["dest"], "")
         avg_info = f"  avg ${deal['rolling_avg']}" if deal["rolling_avg"] else ""
         dates_str = _group_dates_by_price(deal["dates"], deal.get("rolling_avg"))
-        lines.append(f"\n\n*{deal['name']}*{avg_info}\n{dates_str}")
+        lines.append(f"\n\n{flag} *{deal['name']}*{avg_info}\n{dates_str}")
 
     return "\n".join(lines)
 
