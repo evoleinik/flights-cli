@@ -89,34 +89,38 @@ def run_scan():
 
     print(f"[scan] {len(routes)} routes × {len(dates)} dates = {total} queries", file=sys.stderr)
 
-    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        futures = {}
-        for route in routes:
-            for flight_date in dates:
-                f = pool.submit(search_one, route["origin"], route["dest"], flight_date, bool(route["nonstop"]))
-                futures[f] = (route["origin"], route["dest"], route["name"], flight_date)
+    try:
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            futures = {}
+            for route in routes:
+                for flight_date in dates:
+                    f = pool.submit(search_one, route["origin"], route["dest"], flight_date, bool(route["nonstop"]))
+                    futures[f] = (route["origin"], route["dest"], flight_date)
 
-        for future in as_completed(futures):
-            origin, dest, name, flight_date = futures[future]
-            r = future.result()
-            done += 1
+            for future in as_completed(futures):
+                origin, dest, flight_date = futures[future]
+                try:
+                    r = future.result()
+                except Exception as e:
+                    r = {"status": "error", "flights": [], "elapsed_ms": 0, "error": str(e)[:200]}
+                done += 1
 
-            log_scan(db, now, origin, dest, flight_date, r["status"],
-                     error_msg=r.get("error"), flights_found=len(r["flights"]), elapsed_ms=r["elapsed_ms"])
+                log_scan(db, now, origin, dest, flight_date, r["status"],
+                         error_msg=r.get("error"), flights_found=len(r["flights"]), elapsed_ms=r["elapsed_ms"])
 
-            if r["flights"]:
-                insert_prices(db, now, origin, dest, flight_date, r["flights"], CURRENCY)
-                ok += 1
+                if r["flights"]:
+                    insert_prices(db, now, origin, dest, flight_date, r["flights"], CURRENCY)
+                    ok += 1
 
-            if r["status"] == "error":
-                errors += 1
+                if r["status"] == "error":
+                    errors += 1
 
-            if done % 100 == 0:
-                db.commit()
-                print(f"  [{done}/{total}] {ok} ok, {errors} errors", file=sys.stderr)
-
-    db.commit()
-    db.close()
+                if done % 100 == 0:
+                    db.commit()
+                    print(f"  [{done}/{total}] {ok} ok, {errors} errors", file=sys.stderr)
+    finally:
+        db.commit()
+        db.close()
 
     print(f"[scan] done: {done} queries, {ok} with prices, {errors} errors", file=sys.stderr)
     return errors == 0
