@@ -2,6 +2,7 @@
 
 # (origin, dest, name, threshold_usd)
 ROUTES = [
+    # Note: hub routes (BKK→KUL etc.) are in HUB_ROUTES below
     # International (21)
     ("CNX", "AUH", "Abu Dhabi", 250),
     ("CNX", "CAN", "Guangzhou", 80),
@@ -39,10 +40,41 @@ ROUTES = [
 ]
 
 
+# Hub-to-hub routes for backpacker chain planner
+HUB_ROUTES = [
+    # Bangkok hubs
+    ("BKK", "KUL", "Bangkok→KL", 60),
+    ("BKK", "SIN", "Bangkok→Singapore", 80),
+    ("BKK", "HAN", "Bangkok→Hanoi", 60),
+    ("BKK", "RGN", "Bangkok→Yangon", 60),
+    ("BKK", "HKG", "Bangkok→Hong Kong", 100),
+    ("BKK", "TPE", "Bangkok→Taipei", 120),
+    ("DMK", "KUL", "Bangkok-DMK→KL", 60),
+    ("DMK", "SIN", "Bangkok-DMK→Singapore", 80),
+    ("DMK", "HAN", "Bangkok-DMK→Hanoi", 50),
+    ("DMK", "RGN", "Bangkok-DMK→Yangon", 50),
+    # KL hub
+    ("KUL", "BKK", "KL→Bangkok", 60),
+    ("KUL", "SIN", "KL→Singapore", 30),
+    ("KUL", "HAN", "KL→Hanoi", 60),
+    ("KUL", "HKG", "KL→Hong Kong", 80),
+    ("KUL", "TPE", "KL→Taipei", 100),
+    # Singapore hub
+    ("SIN", "BKK", "Singapore→Bangkok", 80),
+    ("SIN", "KUL", "Singapore→KL", 30),
+    ("SIN", "HAN", "Singapore→Hanoi", 60),
+    ("SIN", "HKG", "Singapore→Hong Kong", 100),
+]
+
+
 def seed_routes(db):
     """Insert all routes into DB, skip existing."""
     db.executemany(
         "INSERT OR IGNORE INTO routes (origin, dest, name, threshold, nonstop) VALUES (?,?,?,?,1)",
         [(o, d, n, t) for o, d, n, t in ROUTES],
+    )
+    db.executemany(
+        "INSERT OR IGNORE INTO routes (origin, dest, name, threshold, nonstop) VALUES (?,?,?,?,0)",
+        [(o, d, n, t) for o, d, n, t in HUB_ROUTES],
     )
     db.commit()

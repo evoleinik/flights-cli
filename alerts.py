@@ -41,7 +41,7 @@ def send_telegram(token, chat_id, text):
 
 def find_deals(db):
     """Find all cheap dates per route, grouped by destination."""
-    routes = db.execute("SELECT origin, dest, name, threshold FROM routes WHERE active=1").fetchall()
+    routes = db.execute("SELECT origin, dest, name, threshold FROM routes WHERE active=1 AND origin='CNX'").fetchall()
     deals = []
 
     for route in routes:
@@ -54,6 +54,7 @@ def find_deals(db):
                 SELECT *, ROW_NUMBER() OVER (PARTITION BY flight_date ORDER BY price ASC) AS rn
                 FROM prices
                 WHERE origin=? AND dest=?
+                  AND return_date IS NULL
                   AND scanned_at = (SELECT MAX(scanned_at) FROM scan_log WHERE origin=? AND dest=?)
             )
             WHERE rn = 1
@@ -96,7 +97,7 @@ def find_deals(db):
 
 def find_rt_deals(db):
     """Find cheapest round-trip deals per route."""
-    routes = db.execute("SELECT origin, dest, name, threshold FROM routes WHERE active=1").fetchall()
+    routes = db.execute("SELECT origin, dest, name, threshold FROM routes WHERE active=1 AND origin='CNX'").fetchall()
     deals = []
 
     for route in routes:
@@ -255,6 +256,116 @@ def format_rt_report(deals):
     return "\n".join(lines)
 
 
+def find_chains(db, home="CNX", min_stops=2, max_stops=3, min_stay=2, max_stay=5):
+    """Find cheapest multi-city chains starting and ending at home."""
+    from itertools import permutations
+
+    # Get all cheapest one-way prices per (origin, dest, date)
+    rows = db.execute("""
+        SELECT origin, dest, flight_date, MIN(price) as price
+        FROM prices
+        WHERE return_date IS NULL
+          AND price > 0
+          AND scanned_at >= datetime('now', '-2 days')
+        GROUP BY origin, dest, flight_date
+    """).fetchall()
+
+    # Build lookup: (origin, dest) -> [(date, price), ...]
+    edges = {}
+    for r in rows:
+        edges.setdefault((r["origin"], r["dest"]), []).append(
+            (date.fromisoformat(r["flight_date"]), r["price"])
+        )
+
+    # Mirror CNX outbound as return legs (hub→CNX ≈ CNX→hub)
+    for (orig, dest) in list(edges):
+        if orig == home:
+            reverse = (dest, home)
+            if reverse not in edges:
+                edges[reverse] = edges[(orig, dest)]
+
+    # Get hub airports (non-CNX origins that have outbound flights)
+    hubs = set()
+    for (orig, dest) in edges:
+        if orig != home:
+            hubs.add(orig)
+    # Also include destinations reachable from CNX that are hubs
+    hubs = hubs & {dest for (orig, dest) in edges if orig == home}
+
+    if not hubs:
+        return []
+
+    chains = []
+    for n_stops in range(min_stops, max_stops + 1):
+        for perm in permutations(hubs, n_stops):
+            # Build circuit: home -> perm[0] -> perm[1] -> ... -> home
+            route = [home] + list(perm) + [home]
+
+            # Check all legs exist
+            legs = [(route[i], route[i+1]) for i in range(len(route)-1)]
+            if not all(leg in edges for leg in legs):
+                continue
+
+            # Find cheapest dates for this circuit
+            _find_dated_chains(edges, legs, min_stay, max_stay, chains)
+
+    chains.sort(key=lambda c: c["total"])
+
+    # Deduplicate: keep cheapest per route signature
+    seen = set()
+    unique = []
+    for c in chains:
+        sig = tuple(leg["from"] for leg in c["legs"]) + (c["legs"][-1]["to"],)
+        if sig not in seen:
+            seen.add(sig)
+            unique.append(c)
+    return unique[:10]
+
+
+def _find_dated_chains(edges, legs, min_stay, max_stay, results):
+    """Find cheapest dated itinerary for a given leg sequence."""
+    first_leg = legs[0]
+    # Try each departure date for the first leg
+    for dep_date, dep_price in edges[first_leg]:
+        itinerary = [{"from": first_leg[0], "to": first_leg[1], "date": dep_date, "price": dep_price}]
+        total = dep_price
+        valid = True
+
+        for leg in legs[1:]:
+            # Find cheapest flight on this leg within stay window
+            arrive = itinerary[-1]["date"]
+            best = None
+            for d, p in edges[leg]:
+                gap = (d - arrive).days
+                if min_stay <= gap <= max_stay:
+                    if best is None or p < best[1]:
+                        best = (d, p)
+            if best is None:
+                valid = False
+                break
+            itinerary.append({"from": leg[0], "to": leg[1], "date": best[0], "price": best[1]})
+            total += best[1]
+
+        if valid:
+            trip_days = (itinerary[-1]["date"] - itinerary[0]["date"]).days
+            results.append({"legs": itinerary, "total": total, "days": trip_days})
+
+
+def format_chain_report(chains):
+    """Format backpacker chain routes."""
+    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    lines = [f"🌏 *CNX Backpacker Routes* {today}"]
+
+    for chain in chains:
+        route = " → ".join(leg["from"] for leg in chain["legs"]) + " → " + chain["legs"][-1]["to"]
+        lines.append(f"\n\n*{route}*  ${chain['total']} ({chain['days']}d)")
+        for leg in chain["legs"]:
+            d = leg["date"]
+            lines.append(f"  {MONTH_NAMES[d.month]} {d.day}: {leg['from']}→{leg['to']} ${leg['price']}")
+
+    return "\n".join(lines)
+
+
 def run_alerts():
     db = get_db()
     try:
@@ -284,8 +395,16 @@ def run_alerts():
                     for t in deal["trips"][:5]:
                         log_alert(db, now, deal["origin"], deal["dest"], t["flight_date"], t["price"])
                 print(f"[alerts] sent {len(rt_deals)} trip ideas", file=sys.stderr)
+            time.sleep(1)
 
-        if not deals and not rt_deals:
+        # Backpacker chains
+        chains = find_chains(db)
+        if chains:
+            msg = format_chain_report(chains)
+            if send_telegram(token, chat_id, msg):
+                print(f"[alerts] sent {len(chains)} backpacker routes", file=sys.stderr)
+
+        if not deals and not rt_deals and not chains:
             print("[alerts] no deals found", file=sys.stderr)
 
         db.commit()
