@@ -125,11 +125,11 @@ def find_rt_deals(db):
 
         for row in rows:
             price = row["min_price"]
+            # Deal = below threshold OR ≤75% of rolling avg
             is_deal = False
-
             if rt_threshold and price <= rt_threshold:
                 is_deal = True
-            if rolling_avg and price <= rolling_avg * (1 - DROP_PERCENT / 100):
+            if rolling_avg and price <= rolling_avg * 0.75:
                 is_deal = True
 
             if is_deal:
@@ -237,18 +237,20 @@ def format_rt_report(deals):
         for t in deal["trips"]:
             by_price.setdefault(t["price"], []).append(t)
 
+        # Show top 5 cheapest trips per route
+        all_trips = []
         for price, trips in by_price.items():
+            for t in trips:
+                all_trips.append((price, t))
+        for price, t in all_trips[:5]:
             pct = f" ({int(price / deal['rolling_avg'] * 100)}%)" if deal.get("rolling_avg") else ""
-            trip_strs = []
-            for t in trips[:3]:  # max 3 per price level
-                dep_m, dep_d = int(t["flight_date"][5:7]), int(t["flight_date"][8:])
-                ret_m, ret_d = int(t["return_date"][5:7]), int(t["return_date"][8:])
-                if dep_m == ret_m:
-                    trip_strs.append(f"{MONTH_NAMES[dep_m]} {dep_d}–{ret_d} ({t['stay']}d)")
-                else:
-                    trip_strs.append(f"{MONTH_NAMES[dep_m]} {dep_d}–{MONTH_NAMES[ret_m]} {ret_d} ({t['stay']}d)")
-            extra = f" +{len(trips) - 3} more" if len(trips) > 3 else ""
-            lines.append(f"  ${price}{pct} — {' · '.join(trip_strs)}{extra}")
+            dep_m, dep_d = int(t["flight_date"][5:7]), int(t["flight_date"][8:])
+            ret_m, ret_d = int(t["return_date"][5:7]), int(t["return_date"][8:])
+            if dep_m == ret_m:
+                dates = f"{MONTH_NAMES[dep_m]} {dep_d}–{ret_d} ({t['stay']}d)"
+            else:
+                dates = f"{MONTH_NAMES[dep_m]} {dep_d}–{MONTH_NAMES[ret_m]} {ret_d} ({t['stay']}d)"
+            lines.append(f"  ${price}{pct} — {dates}")
 
     return "\n".join(lines)
 
