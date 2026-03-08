@@ -1,6 +1,5 @@
 """SQLite database for cheap-flights deal scanner."""
 
-import os
 import sqlite3
 from pathlib import Path
 
@@ -13,15 +12,21 @@ def get_db():
     db = sqlite3.connect(str(DB_PATH))
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA foreign_keys=ON")
+    _init_tables(db)
+    return db
+
+
+def _init_tables(db):
     db.executescript("""
         CREATE TABLE IF NOT EXISTS prices (
             id INTEGER PRIMARY KEY,
-            scanned_at TEXT,
-            origin TEXT,
-            dest TEXT,
-            flight_date TEXT,
-            price INTEGER,
-            currency TEXT DEFAULT 'USD',
+            scanned_at TEXT NOT NULL,
+            origin TEXT NOT NULL,
+            dest TEXT NOT NULL,
+            flight_date TEXT NOT NULL,
+            price INTEGER NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'USD',
             airline TEXT,
             stops INTEGER,
             duration TEXT
@@ -31,11 +36,11 @@ def get_db():
 
         CREATE TABLE IF NOT EXISTS scan_log (
             id INTEGER PRIMARY KEY,
-            scanned_at TEXT,
-            origin TEXT,
-            dest TEXT,
-            flight_date TEXT,
-            status TEXT,
+            scanned_at TEXT NOT NULL,
+            origin TEXT NOT NULL,
+            dest TEXT NOT NULL,
+            flight_date TEXT NOT NULL,
+            status TEXT NOT NULL,
             error_msg TEXT,
             flights_found INTEGER DEFAULT 0,
             elapsed_ms INTEGER
@@ -43,9 +48,9 @@ def get_db():
         CREATE INDEX IF NOT EXISTS idx_scan_log_scanned ON scan_log (scanned_at);
 
         CREATE TABLE IF NOT EXISTS routes (
-            origin TEXT,
-            dest TEXT,
-            name TEXT,
+            origin TEXT NOT NULL,
+            dest TEXT NOT NULL,
+            name TEXT NOT NULL,
             threshold INTEGER,
             nonstop INTEGER DEFAULT 1,
             active INTEGER DEFAULT 1,
@@ -54,15 +59,14 @@ def get_db():
 
         CREATE TABLE IF NOT EXISTS alert_log (
             id INTEGER PRIMARY KEY,
-            alerted_at TEXT,
-            origin TEXT,
-            dest TEXT,
-            flight_date TEXT,
-            price INTEGER
+            alerted_at TEXT NOT NULL,
+            origin TEXT NOT NULL,
+            dest TEXT NOT NULL,
+            flight_date TEXT NOT NULL,
+            price INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_alert_log_lookup ON alert_log (origin, dest, flight_date, alerted_at);
     """)
-    return db
 
 
 def log_scan(db, scanned_at, origin, dest, flight_date, status, error_msg=None, flights_found=0, elapsed_ms=0):
@@ -70,16 +74,14 @@ def log_scan(db, scanned_at, origin, dest, flight_date, status, error_msg=None, 
         "INSERT INTO scan_log (scanned_at, origin, dest, flight_date, status, error_msg, flights_found, elapsed_ms) VALUES (?,?,?,?,?,?,?,?)",
         (scanned_at, origin, dest, flight_date, status, error_msg, flights_found, elapsed_ms),
     )
-    db.commit()
 
 
 def insert_prices(db, scanned_at, origin, dest, flight_date, flights, currency="USD"):
     """Insert flight prices. flights is list of dicts with keys: price_num, airline, stops_num, duration."""
     db.executemany(
         "INSERT INTO prices (scanned_at, origin, dest, flight_date, price, currency, airline, stops, duration) VALUES (?,?,?,?,?,?,?,?,?)",
-        [(scanned_at, origin, dest, flight_date, f["price_num"], currency, f["airline"], f["stops_num"], f["duration"]) for f in flights],
+        [(scanned_at, origin, dest, flight_date, f["price_num"], currency, f["airline"], f.get("stops_num"), f["duration"]) for f in flights],
     )
-    db.commit()
 
 
 def get_rolling_avg(db, origin, dest, days=14):
@@ -105,4 +107,3 @@ def log_alert(db, alerted_at, origin, dest, flight_date, price):
         "INSERT INTO alert_log (alerted_at, origin, dest, flight_date, price) VALUES (?,?,?,?,?)",
         (alerted_at, origin, dest, flight_date, price),
     )
-    db.commit()
