@@ -98,24 +98,46 @@ MONTH_NAMES = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
-def _group_dates_by_price(dates):
-    """Group dates by price, then compact by month. e.g. '$28: Apr 25,27,28'"""
+def _collapse_ranges(days):
+    """Turn [1,2,3,5,7,8,9] into '1-3, 5, 7-9'."""
+    nums = sorted(int(d) for d in days)
+    ranges = []
+    start = prev = nums[0]
+    for n in nums[1:]:
+        if n == prev + 1:
+            prev = n
+        else:
+            ranges.append(f"{start}-{prev}" if prev > start else str(start))
+            start = prev = n
+    ranges.append(f"{start}-{prev}" if prev > start else str(start))
+    return ", ".join(ranges)
+
+
+def _group_dates_by_price(dates, max_tiers=2, max_dates=6):
+    """Group dates by price, collapse contiguous days into ranges."""
     from collections import OrderedDict
     by_price = OrderedDict()
     for d in dates:
         by_price.setdefault(d["price"], []).append(d["flight_date"])
 
     parts = []
-    for price, fdates in by_price.items():
-        # Group by month
+    for price, fdates in list(by_price.items())[:max_tiers]:
         by_month = OrderedDict()
         for fd in fdates:
             m, day = int(fd[5:7]), fd[8:]
             by_month.setdefault(m, []).append(day.lstrip("0"))
         month_parts = []
         for m, days in by_month.items():
-            month_parts.append(f"{MONTH_NAMES[m]} {','.join(days)}")
-        parts.append(f"${price}: {' · '.join(month_parts)}")
+            month_parts.append(f"{MONTH_NAMES[m]} {_collapse_ranges(days)}")
+        extra = ""
+        remaining = len(fdates) - max_dates
+        if remaining > 0:
+            extra = f" +{remaining} more"
+        parts.append(f"  ${price} — {' · '.join(month_parts)}{extra}")
+
+    skipped = len(by_price) - max_tiers
+    if skipped > 0:
+        parts.append(f"  +{skipped} more price levels")
     return "\n".join(parts)
 
 
