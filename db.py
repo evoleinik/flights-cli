@@ -25,6 +25,7 @@ def _init_tables(db):
             origin TEXT NOT NULL,
             dest TEXT NOT NULL,
             flight_date TEXT NOT NULL,
+            return_date TEXT,
             price INTEGER NOT NULL,
             currency TEXT NOT NULL DEFAULT 'USD',
             airline TEXT,
@@ -68,6 +69,11 @@ def _init_tables(db):
         CREATE INDEX IF NOT EXISTS idx_alert_log_lookup ON alert_log (origin, dest, flight_date, alerted_at);
     """)
 
+    # Migration: add return_date if missing (existing DBs)
+    cols = [r[1] for r in db.execute("PRAGMA table_info(prices)").fetchall()]
+    if "return_date" not in cols:
+        db.execute("ALTER TABLE prices ADD COLUMN return_date TEXT")
+
 
 def log_scan(db, scanned_at, origin, dest, flight_date, status, error_msg=None, flights_found=0, elapsed_ms=0):
     db.execute(
@@ -76,11 +82,11 @@ def log_scan(db, scanned_at, origin, dest, flight_date, status, error_msg=None, 
     )
 
 
-def insert_prices(db, scanned_at, origin, dest, flight_date, flights, currency="USD"):
+def insert_prices(db, scanned_at, origin, dest, flight_date, flights, currency="USD", return_date=None):
     """Insert flight prices. flights is list of dicts with keys: price_num, airline, stops_num, duration."""
     db.executemany(
-        "INSERT INTO prices (scanned_at, origin, dest, flight_date, price, currency, airline, stops, duration) VALUES (?,?,?,?,?,?,?,?,?)",
-        [(scanned_at, origin, dest, flight_date, f["price_num"], currency, f["airline"], f.get("stops_num"), f["duration"]) for f in flights],
+        "INSERT INTO prices (scanned_at, origin, dest, flight_date, return_date, price, currency, airline, stops, duration) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [(scanned_at, origin, dest, flight_date, return_date, f["price_num"], currency, f["airline"], f.get("stops_num"), f["duration"]) for f in flights],
     )
 
 
@@ -88,6 +94,15 @@ def get_rolling_avg(db, origin, dest, days=14):
     """Return AVG(price) for last N days, or None."""
     row = db.execute(
         "SELECT AVG(price) as avg_price FROM prices WHERE origin=? AND dest=? AND scanned_at >= datetime('now', ?)",
+        (origin, dest, f"-{days} days"),
+    ).fetchone()
+    return row["avg_price"] if row else None
+
+
+def get_rt_rolling_avg(db, origin, dest, days=14):
+    """Return AVG(price) for round-trip prices over last N days, or None."""
+    row = db.execute(
+        "SELECT AVG(price) as avg_price FROM prices WHERE origin=? AND dest=? AND return_date IS NOT NULL AND scanned_at >= datetime('now', ?)",
         (origin, dest, f"-{days} days"),
     ).fetchone()
     return row["avg_price"] if row else None
