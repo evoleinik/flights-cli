@@ -4,11 +4,11 @@
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import requests
 
-from db import get_db, get_rolling_avg, log_alert, was_alerted_recently
+from db import get_db, get_rolling_avg, get_rt_rolling_avg, log_alert, was_alerted_recently
 
 TELEGRAM_CONFIG = os.path.expanduser("~/Sync/config/telegram/config")
 ROLLING_AVG_DAYS = 14
@@ -94,6 +94,69 @@ def find_deals(db):
     return deals
 
 
+def find_rt_deals(db):
+    """Find cheapest round-trip deals per route."""
+    routes = db.execute("SELECT origin, dest, name, threshold FROM routes WHERE active=1").fetchall()
+    deals = []
+
+    for route in routes:
+        origin, dest, name, threshold = route["origin"], route["dest"], route["name"], route["threshold"]
+        rt_threshold = threshold * 2 if threshold else None
+
+        # Get cheapest round-trip per (flight_date, return_date) from latest RT scan
+        rows = db.execute("""
+            SELECT flight_date, return_date, price AS min_price, airline, stops, duration
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY flight_date, return_date ORDER BY price ASC) AS rn
+                FROM prices
+                WHERE origin=? AND dest=?
+                  AND return_date IS NOT NULL
+                  AND scanned_at = (SELECT MAX(scanned_at) FROM prices WHERE origin=? AND dest=? AND return_date IS NOT NULL)
+            )
+            WHERE rn = 1
+            ORDER BY price ASC
+        """, (origin, dest, origin, dest)).fetchall()
+
+        if not rows:
+            continue
+
+        rolling_avg = get_rt_rolling_avg(db, origin, dest, ROLLING_AVG_DAYS)
+        cheap_trips = []
+
+        for row in rows:
+            price = row["min_price"]
+            is_deal = False
+
+            if rt_threshold and price <= rt_threshold:
+                is_deal = True
+            if rolling_avg and price <= rolling_avg * (1 - DROP_PERCENT / 100):
+                is_deal = True
+
+            if is_deal:
+                dep = row["flight_date"]
+                ret = row["return_date"]
+                stay = (date.fromisoformat(ret) - date.fromisoformat(dep)).days
+                cheap_trips.append({
+                    "flight_date": dep,
+                    "return_date": ret,
+                    "price": price,
+                    "stay": stay,
+                })
+
+        if cheap_trips:
+            deals.append({
+                "origin": origin,
+                "dest": dest,
+                "name": name,
+                "cheapest": cheap_trips[0]["price"],
+                "rolling_avg": int(rolling_avg) if rolling_avg else None,
+                "trips": cheap_trips,
+            })
+
+    deals.sort(key=lambda d: d["cheapest"])
+    return deals
+
+
 MONTH_NAMES = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -158,6 +221,38 @@ def format_report(deals):
     return "\n".join(lines)
 
 
+def format_rt_report(deals):
+    """Format round-trip deals as trip ideas."""
+    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    lines = [f"✈ *CNX Trip Ideas* {today}"]
+
+    for deal in deals:
+        flag = FLAGS.get(deal["dest"], "")
+        avg_info = f"  avg ${deal['rolling_avg']}" if deal["rolling_avg"] else ""
+        lines.append(f"\n\n{flag} *{deal['name']}*{avg_info}")
+
+        # Group trips by price, show date range + stay
+        from collections import OrderedDict
+        by_price = OrderedDict()
+        for t in deal["trips"]:
+            by_price.setdefault(t["price"], []).append(t)
+
+        for price, trips in by_price.items():
+            pct = f" ({int(price / deal['rolling_avg'] * 100)}%)" if deal.get("rolling_avg") else ""
+            trip_strs = []
+            for t in trips[:3]:  # max 3 per price level
+                dep_m, dep_d = int(t["flight_date"][5:7]), int(t["flight_date"][8:])
+                ret_m, ret_d = int(t["return_date"][5:7]), int(t["return_date"][8:])
+                if dep_m == ret_m:
+                    trip_strs.append(f"{MONTH_NAMES[dep_m]} {dep_d}–{ret_d} ({t['stay']}d)")
+                else:
+                    trip_strs.append(f"{MONTH_NAMES[dep_m]} {dep_d}–{MONTH_NAMES[ret_m]} {ret_d} ({t['stay']}d)")
+            extra = f" +{len(trips) - 3} more" if len(trips) > 3 else ""
+            lines.append(f"  ${price}{pct} — {' · '.join(trip_strs)}{extra}")
+
+    return "\n".join(lines)
+
+
 def run_alerts():
     db = get_db()
     try:
@@ -165,26 +260,33 @@ def run_alerts():
         token = tg["TELEGRAM_BOT_TOKEN"]
         chat_id = tg.get("TELEGRAM_FLIGHTS_CHANNEL", tg["TELEGRAM_CHANNEL_ID"])
 
-        deals = find_deals(db)
-
-        if not deals:
-            print("[alerts] no deals found", file=sys.stderr)
-            return
-
-        print(f"[alerts] {len(deals)} deals found", file=sys.stderr)
-
         now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        msg = format_report(deals)
-        total_dates = sum(len(d["dates"]) for d in deals)
 
-        if send_telegram(token, chat_id, msg):
-            for deal in deals:
-                for d in deal["dates"][:5]:
-                    log_alert(db, now, deal["origin"], deal["dest"], d["flight_date"], d["price"])
-            db.commit()
-            print(f"[alerts] sent {len(deals)} routes ({total_dates} dates) in 1 message", file=sys.stderr)
-        else:
-            print("[alerts] failed to send", file=sys.stderr)
+        # One-way deals
+        deals = find_deals(db)
+        if deals:
+            msg = format_report(deals)
+            if send_telegram(token, chat_id, msg):
+                for deal in deals:
+                    for d in deal["dates"][:5]:
+                        log_alert(db, now, deal["origin"], deal["dest"], d["flight_date"], d["price"])
+                print(f"[alerts] sent {len(deals)} one-way deals", file=sys.stderr)
+            time.sleep(1)
+
+        # Round-trip deals
+        rt_deals = find_rt_deals(db)
+        if rt_deals:
+            msg = format_rt_report(rt_deals)
+            if send_telegram(token, chat_id, msg):
+                for deal in rt_deals:
+                    for t in deal["trips"][:5]:
+                        log_alert(db, now, deal["origin"], deal["dest"], t["flight_date"], t["price"])
+                print(f"[alerts] sent {len(rt_deals)} trip ideas", file=sys.stderr)
+
+        if not deals and not rt_deals:
+            print("[alerts] no deals found", file=sys.stderr)
+
+        db.commit()
     finally:
         db.close()
 
