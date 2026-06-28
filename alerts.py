@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
 """Check latest prices against thresholds + rolling avg, send Telegram alerts."""
 
 import os

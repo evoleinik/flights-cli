@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["fast_flights==3.0.2", "typing_extensions"]
+# ///
 """Find the cheapest flights for a route across a date range.
 
 Usage:
@@ -18,51 +22,12 @@ from calendar import monthrange
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 
-from fast_flights import FlightData, Passengers, TFSData, get_flights_from_filter
+from ff import search
 
 
 def search_date(origin, dest, dep_date, return_date, currency, nonstop):
     try:
-        flight_data = [FlightData(date=dep_date, from_airport=origin, to_airport=dest)]
-        trip = "one-way"
-        if return_date:
-            flight_data.append(FlightData(date=return_date, from_airport=dest, to_airport=origin))
-            trip = "round-trip"
-
-        tfs = TFSData.from_interface(
-            flight_data=flight_data,
-            trip=trip,
-            seat="economy",
-            passengers=Passengers(adults=1),
-            max_stops=0 if nonstop else None,
-        )
-        result = get_flights_from_filter(tfs, currency=currency)
-
-        if not result.flights:
-            return {"date": dep_date, "return": return_date, "flights": []}
-
-        flights = []
-        for fl in result.flights:
-            try:
-                price_str = fl.price.replace(",", "").strip()
-                num = ""
-                for c in price_str:
-                    if c.isdigit():
-                        num += c
-                price_num = int(num) if num else 999999
-            except Exception:
-                price_num = 999999
-
-            flights.append({
-                "price": fl.price,
-                "price_num": price_num,
-                "airline": fl.name,
-                "stops": fl.stops,
-                "duration": fl.duration,
-                "departure": fl.departure,
-                "arrival": fl.arrival,
-            })
-
+        flights = search(origin, dest, dep_date, return_date, currency, nonstop)
         return {"date": dep_date, "return": return_date, "flights": flights}
     except Exception as e:
         return {"date": dep_date, "return": return_date, "flights": [], "error": str(e)[:80]}

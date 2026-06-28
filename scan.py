@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["fast_flights==3.0.2", "typing_extensions"]
+# ///
 """Scan all routes × dates, store prices + log every request."""
 
 import sys
@@ -6,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 
-from fast_flights import FlightData, Passengers, TFSData, get_flights_from_filter
+from ff import search
 
 from db import get_db, insert_prices, log_scan
 from routes import seed_routes
@@ -16,103 +20,41 @@ DAYS_AHEAD = 60
 WORKERS = 5
 
 
-def parse_price(price_str):
-    num = ""
-    for c in price_str.replace(",", ""):
-        if c.isdigit():
-            num += c
-    return int(num) if num else None
+def _to_rows(raw):
+    """Map ff.search() dicts -> insert_prices() rows (price_num/airline/stops_num/duration)."""
+    rows = []
+    for fl in raw:
+        if fl["price_num"] >= 999999:
+            continue
+        rows.append({
+            "price_num": fl["price_num"],
+            "airline": fl["airline"],
+            "stops_num": fl["stops"],
+            "duration": fl["duration"],
+        })
+    return rows
 
 
-def parse_stops(stops_val):
-    if isinstance(stops_val, int):
-        return stops_val
-    if stops_val == "Unknown" or stops_val is None:
-        return None
+def _search(origin, dest, dep_date, ret_date=None, nonstop=True):
+    t0 = time.monotonic()
     try:
-        return int(stops_val)
-    except (ValueError, TypeError):
-        return None
+        raw = search(origin, dest, dep_date, ret_date, CURRENCY, nonstop)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        rows = _to_rows(raw)
+        status = "ok" if rows else "no_flights"
+        return {"status": status, "flights": rows, "elapsed_ms": elapsed}
+    except Exception as e:
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return {"status": "error", "flights": [], "elapsed_ms": elapsed, "error": str(e)[:200]}
 
 
 def search_one(origin, dest, flight_date, nonstop=True):
-    t0 = time.monotonic()
-    try:
-        tfs = TFSData.from_interface(
-            flight_data=[FlightData(date=flight_date, from_airport=origin, to_airport=dest)],
-            trip="one-way",
-            seat="economy",
-            passengers=Passengers(adults=1),
-            max_stops=0 if nonstop else None,
-        )
-        result = get_flights_from_filter(tfs, currency=CURRENCY)
-        elapsed = int((time.monotonic() - t0) * 1000)
-
-        if not result.flights:
-            return {"status": "no_flights", "flights": [], "elapsed_ms": elapsed}
-
-        flights = []
-        for fl in result.flights:
-            price_num = parse_price(fl.price)
-            if price_num is None:
-                continue
-            flights.append({
-                "price_num": price_num,
-                "airline": fl.name or "",
-                "stops_num": parse_stops(fl.stops),
-                "duration": fl.duration or "",
-            })
-
-        return {"status": "ok", "flights": flights, "elapsed_ms": elapsed}
-
-    except Exception as e:
-        elapsed = int((time.monotonic() - t0) * 1000)
-        err = str(e)[:200]
-        if "No flights found" in err:
-            return {"status": "no_flights", "flights": [], "elapsed_ms": elapsed}
-        return {"status": "error", "flights": [], "elapsed_ms": elapsed, "error": err}
+    return _search(origin, dest, flight_date, None, nonstop)
 
 
 def search_roundtrip(origin, dest, dep_date, ret_date, nonstop=True):
     """Search for round-trip flights. Returns same format as search_one."""
-    t0 = time.monotonic()
-    try:
-        tfs = TFSData.from_interface(
-            flight_data=[
-                FlightData(date=dep_date, from_airport=origin, to_airport=dest),
-                FlightData(date=ret_date, from_airport=dest, to_airport=origin),
-            ],
-            trip="round-trip",
-            seat="economy",
-            passengers=Passengers(adults=1),
-            max_stops=0 if nonstop else None,
-        )
-        result = get_flights_from_filter(tfs, currency=CURRENCY)
-        elapsed = int((time.monotonic() - t0) * 1000)
-
-        if not result.flights:
-            return {"status": "no_flights", "flights": [], "elapsed_ms": elapsed}
-
-        flights = []
-        for fl in result.flights:
-            price_num = parse_price(fl.price)
-            if price_num is None:
-                continue
-            flights.append({
-                "price_num": price_num,
-                "airline": fl.name or "",
-                "stops_num": parse_stops(fl.stops),
-                "duration": fl.duration or "",
-            })
-
-        return {"status": "ok", "flights": flights, "elapsed_ms": elapsed}
-
-    except Exception as e:
-        elapsed = int((time.monotonic() - t0) * 1000)
-        err = str(e)[:200]
-        if "No flights found" in err:
-            return {"status": "no_flights", "flights": [], "elapsed_ms": elapsed}
-        return {"status": "error", "flights": [], "elapsed_ms": elapsed, "error": err}
+    return _search(origin, dest, dep_date, ret_date, nonstop)
 
 
 def run_scan():
