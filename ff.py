@@ -59,11 +59,8 @@ def _total_minutes(legs):
     return total
 
 
-def search(origin, dest, dep_date, return_date=None, currency="USD", nonstop=False):
-    """Search one route/date. Returns normalized flight dicts (possibly []).
-
-    Network/parse errors propagate to the caller.
-    """
+def _search_once(origin, dest, dep_date, return_date, currency, max_stops):
+    """One Google Flights query -> normalized flight dicts (possibly [])."""
     queries = [FlightQuery(date=dep_date, from_airport=origin, to_airport=dest)]
     trip = "one-way"
     if return_date:
@@ -76,7 +73,7 @@ def search(origin, dest, dep_date, return_date=None, currency="USD", nonstop=Fal
         seat="economy",
         passengers=Passengers(adults=1),
         currency=currency,
-        max_stops=0 if nonstop else None,
+        max_stops=max_stops,
     )
 
     try:
@@ -98,3 +95,28 @@ def search(origin, dest, dep_date, return_date=None, currency="USD", nonstop=Fal
             "arrival": _fmt_dt(legs[-1].arrival) if legs else "",
         })
     return out
+
+
+def search(origin, dest, dep_date, return_date=None, currency="USD", nonstop=False):
+    """Search one route/date. Returns normalized flight dicts (possibly []).
+
+    Google's unconstrained (all-stops) payload omits the nonstop bucket, so an
+    all-stops search would silently hide direct flights. When stops are
+    unconstrained we therefore also fetch the nonstop bucket and merge it in
+    (deduped). Network/parse errors propagate to the caller.
+    """
+    rows = _search_once(origin, dest, dep_date, return_date, currency,
+                        max_stops=0 if nonstop else None)
+    if nonstop:
+        return rows
+
+    nonstop_rows = _search_once(origin, dest, dep_date, return_date, currency, max_stops=0)
+    seen = set()
+    merged = []
+    for f in nonstop_rows + rows:  # nonstop first so it survives dedup
+        k = (f["price_num"], f["stops"], f["departure"], f["arrival"], f["airline"])
+        if k in seen:
+            continue
+        seen.add(k)
+        merged.append(f)
+    return merged
