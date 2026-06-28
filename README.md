@@ -120,9 +120,18 @@ uv run alerts.py    # compare the latest prices to thresholds, send Telegram ale
 ./run.sh            # both, with logging — point cron at this
 ```
 
-Edit your routes and price thresholds in `routes.py`. Telegram credentials are read from
-`~/Sync/config/telegram/config` (`TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`), so nothing
-secret lives in the repo. The database and logs go in `~/.cheap-flights/`.
+Edit your routes and price thresholds in `routes.py`. For alerts, give it a Telegram bot
+token and chat id — either as environment variables:
+
+```bash
+export TELEGRAM_BOT_TOKEN=123456:abc...
+export TELEGRAM_CHAT_ID=-1001234567890
+uv run alerts.py
+```
+
+or in a `KEY=VALUE` file at `~/.config/flights-cli/telegram` (override the path with the
+`TELEGRAM_CONFIG` env var). Either way no secret lives in the repo. The database and logs
+go in `~/.cheap-flights/`.
 
 ## How it's put together
 

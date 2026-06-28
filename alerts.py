@@ -14,20 +14,43 @@ import requests
 
 from db import get_db, get_rolling_avg, get_rt_rolling_avg, log_alert, was_alerted_recently
 
-TELEGRAM_CONFIG = os.path.expanduser("~/Sync/config/telegram/config")
+# Telegram creds come from env vars first; a KEY=VALUE file is the fallback.
+# Override the file location with TELEGRAM_CONFIG (e.g. point it at a synced dir).
+TELEGRAM_CONFIG = os.environ.get(
+    "TELEGRAM_CONFIG", os.path.expanduser("~/.config/flights-cli/telegram")
+)
 ROLLING_AVG_DAYS = 14
 DROP_PERCENT = 30  # alert if 30%+ below rolling avg
 
 
 def load_telegram_config():
-    config = {}
-    with open(TELEGRAM_CONFIG) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                config[k.strip()] = v.strip()
-    return config
+    """Resolve Telegram bot token + chat id.
+
+    Order: env vars (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID), then a KEY=VALUE
+    file at $TELEGRAM_CONFIG. Exits with a hint if neither yields both.
+    """
+    cfg = {}
+    if os.path.exists(TELEGRAM_CONFIG):
+        with open(TELEGRAM_CONFIG) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    cfg[k.strip()] = v.strip()
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("TELEGRAM_BOT_TOKEN")
+    chat_id = (
+        os.environ.get("TELEGRAM_CHAT_ID")
+        or cfg.get("TELEGRAM_CHAT_ID")
+        or cfg.get("TELEGRAM_FLIGHTS_CHANNEL")  # legacy key
+        or cfg.get("TELEGRAM_CHANNEL_ID")  # legacy key
+    )
+    if not token or not chat_id:
+        sys.exit(
+            "telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID "
+            f"env vars, or put them in {TELEGRAM_CONFIG}"
+        )
+    return {"token": token, "chat_id": chat_id}
 
 
 def send_telegram(token, chat_id, text):
@@ -374,8 +397,8 @@ def run_alerts():
     db = get_db()
     try:
         tg = load_telegram_config()
-        token = tg["TELEGRAM_BOT_TOKEN"]
-        chat_id = tg.get("TELEGRAM_FLIGHTS_CHANNEL", tg["TELEGRAM_CHANNEL_ID"])
+        token = tg["token"]
+        chat_id = tg["chat_id"]
 
         now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
