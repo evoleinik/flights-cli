@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+
+# Local agent/session scratch
+.ralph-done
+ralph-state.md
+.spawn-sessions/
+.claude/
+.mcp.json
+
+# Unrelated personal scripts that happen to live in this dir — never publish
+airbnb.py
+roomgrabs.py
+aqicn_decode.py
