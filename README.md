@@ -1,14 +1,16 @@
 # flights-cli
 
-**Agent-friendly Google Flights CLI + daily deal scanner. Pure Python, JSON-first, zero-install via `uv`.**
+I kept clicking through fare calendars one day at a time to find a cheap flight, so I
+wrote this instead. Give it a route and a date range; it prints the cheapest flight on
+each day, right in the terminal.
 
-Find the cheapest fares for a route across a whole date range in one command — and
-optionally run it nightly to alert you when a price drops. It's a thin, scriptable
-wrapper over [`fast_flights`](https://github.com/AWeirdDev/fast-flights) (which reads
-Google Flights' embedded data), shaped for piping into other tools and AI agents.
+Under the hood it's a small wrapper around
+[`fast_flights`](https://github.com/AWeirdDev/fast-flights), which reads the data behind
+Google Flights. There's a CLI for one-off searches, and an optional nightly scanner that
+pings me on Telegram when a fare drops.
 
 ```
-$ uv run cli.py SIN CNX -f 2026-06-29 -t 2026-07-03 --currency SGD --nonstop
+$ uv run cli.py SIN CNX -f 2026-06-29 -t 2026-07-03 --nonstop --currency SGD
 Date                            Price  Stops  Airline                   Duration
 -------------------------------------------------------------------------------------
 2026-06-29                    SGD 271      0  Scoot                     3 hr 5 min
@@ -20,69 +22,64 @@ Date                            Price  Stops  Airline                   Duration
 CHEAPEST: 2026-06-30 -- SGD 230 on Scoot (3 hr 5 min)
 ```
 
-## Why?
+## Why bother
 
-Booking sites make you scrub a fare calendar one day at a time. This scans every day
-in a range concurrently and prints the cheapest per day, with a `--json` mode for
-scripts and agents.
+Booking sites make you check dates one by one. This checks the whole range at once and
+hands you a table. And because it can print JSON, I can pipe it into other scripts or let
+an AI agent drive it instead of eyeballing prices in a browser tab.
 
-| | flights-cli | Google Flights UI | Most aggregators |
-|---|---|---|---|
-| Whole date range at once | ✅ | partial (calendar) | ❌ |
-| Scriptable / `--json` | ✅ | ❌ | ❌ |
-| Round-trip stay sweep | ✅ `--round N` | ❌ | ❌ |
-| Nonstop filter | ✅ `--nonstop` | ✅ | ✅ |
-| Nightly price alerts | ✅ (optional) | ❌ | some (email) |
-| Install | one `uv` command | — | — |
+If the Google Flights website already works fine for you, you honestly might not need
+this. It earns its keep when you're flexible on dates, comparing a stretch of days, or
+wiring flight prices into something else.
 
 ## Install
 
-Requires [`uv`](https://docs.astral.sh/uv/) and Python 3.10+. No manual `pip` —
-dependencies are pinned inline ([PEP 723](https://peps.python.org/pep-0723/)) and
-auto-installed on first run.
+You'll need [`uv`](https://docs.astral.sh/uv/) and Python 3.10+. There's no `pip install`
+step — the dependencies are pinned right inside each script
+([PEP 723](https://peps.python.org/pep-0723/)) and `uv` grabs them on the first run.
 
 ```bash
 git clone https://github.com/evoleinik/flights-cli
 cd flights-cli
-uv run cli.py SIN CNX --nonstop      # that's it
+uv run cli.py SIN CNX --nonstop
 ```
 
-## Quick start
+## Using it
 
 ```bash
-# Cheapest per day, next 30 days
+# Cheapest per day for the next 30 days
 uv run cli.py CNX SIN
 
-# Specific range, nonstop only, in SGD
+# A specific window, nonstop only, priced in SGD
 uv run cli.py SIN CNX -f 2026-06-29 -t 2026-07-03 --nonstop --currency SGD
 
 # A whole month
 uv run cli.py CNX SIN -m 2026-08
 
-# Round trip with a 7-day stay (sweeps each departure day)
+# Round trip with a 7-day stay (tries each departure day)
 uv run cli.py CNX SIN --round 7
 
-# JSON for scripts/agents
+# JSON, for scripts and agents
 uv run cli.py SIN CNX --nonstop --json | jq '.[0]'
 ```
 
-## Commands
+## The flags
 
 ```
 uv run cli.py ORIGIN DEST [options]
 
-  ORIGIN, DEST          IATA airport codes (e.g. SIN, CNX)
+  ORIGIN, DEST          IATA airport codes (SIN, CNX, ...)
   -f, --from-date DATE  Start date YYYY-MM-DD (default: tomorrow)
   -t, --to-date DATE    End date YYYY-MM-DD   (default: +30 days)
   -m, --month YYYY-MM   Scan an entire month
   --round DAYS          Round trip with an N-day stay
-  --nonstop             Nonstop flights only
+  --nonstop             Nonstop only
   --currency CODE       Currency (default: USD)
-  --json                JSON output to stdout
+  --json                Print JSON to stdout
   -w, --workers N       Parallel workers (default: 5)
 ```
 
-`--json` emits an array of the cheapest flight per date:
+With `--json` you get an array — the cheapest flight for each date:
 
 ```json
 {
@@ -98,10 +95,11 @@ uv run cli.py ORIGIN DEST [options]
 }
 ```
 
-## Use with AI agents
+## Letting an agent use it
 
-flights-cli is built for agents: `--json`, deterministic exit codes, no interactive
-prompts, data on stdout. Drop this in your agent's context (CLAUDE.md / AGENTS.md):
+I built this partly so an agent could run it: JSON output, clean exit codes, no
+interactive prompts, data on stdout. If you want yours to know about it, drop something
+like this in its context (CLAUDE.md / AGENTS.md):
 
 ```
 flights-cli — cheapest fares for a route across a date range (Google Flights data).
@@ -110,44 +108,43 @@ Returns JSON: array of {date, price_num, airline, stops, duration, departure, ar
 one cheapest flight per day. Always pass --json. ORIGIN/DEST are IATA codes.
 ```
 
-## Optional: nightly deal scanner
+## The nightly scanner (optional)
 
-Beyond the one-shot CLI, the repo includes a cron-able scanner that tracks a watchlist
-of routes in SQLite and pings you on Telegram when a fare beats its threshold or recent
-average.
+If you want price tracking rather than one-off lookups, there's a small scanner too. It
+keeps a watchlist of routes in SQLite and messages you when a fare beats its threshold or
+its recent average.
 
 ```bash
-uv run scan.py      # scan all routes in routes.py × next 60 days -> SQLite
-uv run alerts.py    # compare latest prices to thresholds, send Telegram alerts
-./run.sh            # both, with logging (point cron at this)
+uv run scan.py      # scan every route in routes.py across the next 60 days -> SQLite
+uv run alerts.py    # compare the latest prices to thresholds, send Telegram alerts
+./run.sh            # both, with logging — point cron at this
 ```
 
-- Routes & price thresholds: edit `routes.py`.
-- Telegram credentials are read from `~/Sync/config/telegram/config`
-  (`TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`) — nothing secret is committed.
-- Data lives in `~/.cheap-flights/` (SQLite DB + daily logs).
+Edit your routes and price thresholds in `routes.py`. Telegram credentials are read from
+`~/Sync/config/telegram/config` (`TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`), so nothing
+secret lives in the repo. The database and logs go in `~/.cheap-flights/`.
 
-## How it works
+## How it's put together
 
 ```
-cli.py / scan.py / alerts.py   <- entry points (PEP 723 pinned deps)
-        │
-        ff.py                  <- single adapter over fast_flights 3.x
-        │                         normalizes results; unions the nonstop bucket
-        ▼                         (Google's all-stops payload omits it)
-   fast_flights==3.0.2         <- parses Google Flights' embedded JSON
+cli.py / scan.py / alerts.py   entry points (deps pinned inline via PEP 723)
+        |
+        ff.py                  the one adapter over fast_flights 3.x:
+        |                      normalizes results and merges the nonstop
+        v                      bucket back in (Google's all-stops payload drops it)
+   fast_flights==3.0.2         parses Google Flights' embedded JSON
 ```
 
-`ff.py` is the only file that touches the scraping library, so when Google moves its
-data shape there's exactly one place to fix.
+`ff.py` is the only file that talks to the scraping library. When Google reshuffles its
+data, that's the single place to fix.
 
-## Limitations
+## Caveats
 
-- It scrapes Google Flights' data; there is **no official API**. Expect occasional
-  breakage when Google changes their payload — that's inherent to this category.
-- Prices are indicative; always confirm on the airline/booking site before purchase.
-- Connecting-flight times come from Google's data and can be incomplete on some itineraries.
+There's no official Google Flights API — this reads the page's data, so it'll break now
+and then when Google changes things. Prices are a guide, not a quote; always confirm on
+the airline's site before you book. And connecting-flight times come straight from
+Google's data, which is occasionally patchy.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Built by Evgeny Oleynik. Issues and PRs welcome.
